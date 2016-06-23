@@ -1,7 +1,6 @@
 <?php
 	require 'config.php';
-
-	$alert_threshold = 100;
+	require_once 'lib-pagerduty.php';
 
 	$created = gmdate('Y-m-dTH:i:s') . "Z";
 	$nonce = md5(rand(), true);
@@ -18,21 +17,19 @@
             }
         ],
         "elements": [
-        	{
-        		"id": "page",
-        		"search":
-        			{
-        				"keywords": [
-        					"an error has occurred"
-        				]
-        			}
-        	}
-        ]
-    }
+			{
+				"id": "page",
+				"search":
+					{
+						"keywords": [
+							"an error has occurred"
+						]
+					}
+			}
+		]
+	}
 }
 EOD;
-
-	$useCache = false;
 
 	$curl = curl_init();
 	curl_setopt($curl, CURLOPT_URL, 'https://api.omniture.com/admin/1.4/rest/?method=Report.Run');
@@ -46,16 +43,14 @@ EOD;
 		sprintf('X-WSSE: UsernameToken Username="%s", PasswordDigest="%s", Nonce="%s", Created="%s"', $username, $password_digest, $base64_nonce, $created),
 	));
 
-	$head = $useCache ? $cache : curl_exec($curl);
+	$head = $useCache ? $cache_realtime_normal : curl_exec($curl);
 	$json = json_decode($head, true);
 
 	$data = $json['report']['data'];
 
 	$mined_data = array ();
 	
-	echo "> " . count ($data) . "\n";
 	foreach ($data as $datapoint) {
-		echo ">> " . count ($datapoint['breakdown']) . "\n";
 		foreach ($datapoint['breakdown'] as $breakdownpoint) {
 			$name = explode ('?', $breakdownpoint['name'])[0];
 			$trend = $breakdownpoint['trend'];
@@ -69,16 +64,23 @@ EOD;
 		}
 	}
 
-	echo "\n\n";
-
 	$total = 0;
+	$buffered_message = '';
 	foreach ($mined_data as $key => $value) {
-		echo "$key : $value \n";
+		$buffered_message .= "$key($value) ";
 		$total += $value;
 	}
+	$threshold_passed = $total >= $alert_threshold;
 
-	echo $total . "\n";
+	echo "Total errors: $total";
 
-	if ($total >= $alert_threshold) {
-
+	$isPagerdutyAlertOpen = isPagerdutyAlertOpen();
+	if ($threshold_passed && !$isPagerdutyAlertOpen) {
+		echo '(Alerting)';
+		alertPagerduty ($total, $buffered_message);
+	} else if ($threshold_passed) {
+		echo '(Alert)';
+	} else if (!$threshold_passed && $isPagerdutyAlertOpen) {
+		echo '(Stopping Alert)';
+		PagerDutyAlertClose ();
 	}
